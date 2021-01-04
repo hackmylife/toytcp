@@ -133,3 +133,27 @@ impl Packet for TCPPacket {
     }
 }
 
+impl Debug for TCPPacket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            r"
+        src: {}
+        dst: {}
+        flag: {}
+        payload_len: {}",
+            self.get_src(),
+            self.get_dest(),
+            tcpflags::flag_to_string(self.get_flag()),
+            self.payload().len()
+        )
+    }
+}
+
+impl<'a> From<TcpPacket<'a>> for TCPPacket {
+    fn from(packet: TCPPacket) -> Self {
+        Self {
+            buffer: packet.packet().to_vec(),
+        }
+    }
+}
