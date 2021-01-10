@@ -10,6 +10,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 use std::{cmp, ops::Range, str, thread};
+use std::sync::{RwLock, Condvar, Mutex, Arc};
 
 const UNDETERMINED_IP_ADDR: std::net::Ipv4Addr = Ipv4Addr::new(0,0,0, 0);
 const UNDETERMINED_PORT: u16 = 0;
@@ -19,13 +20,22 @@ const MSS: usize = 1460;
 const PORT_RANGE: Range<u16> = 40000..60000;
 
 pub struct TCP {
-    sockets: HashMap<SockID, Socket>,
+    sockets: RwLock<HashMap<SockID, Socket>>,
+    event_condvar: (Mutex<Option<TCPEvent>>, Condvar),
 }
 
 impl TCP {
-    pub fn new() -> Self {
-        let sockets: HashMap<SockID, Socket> = HashMap::new();
-        let tcp = Self { sockets };
+    pub fn new() -> Arc<Self> {
+        let sockets = RwLock::new(HashMap::new());
+        let tcp = Arc::new(Self {
+            sockets,
+            event_condvar: (Mutex::new(None), Condvar::new());
+        });
+        let clonned_tcp = tcp.clone();
+        std::thread::spawn(move || {
+            // パケット受信用のスレッド
+            clonned_tcp.receive_handler().unwrap();
+        });
         tcp
     }
 
