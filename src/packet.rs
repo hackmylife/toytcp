@@ -105,7 +105,7 @@ impl TCPPacket{
         self.buffer[14..16].copy_from_slice(&window.to_be_bytes())
     }
 
-    pub fn set_checksum(&mut self, payload: &[u8]) {
+    pub fn set_checksum(&mut self, payload: u16) {
         self.buffer[TCP_HEADER_SIZE..TCP_HEADER_SIZE + payload.len() as usize]
             .copy_from_slice(payload)
     }
