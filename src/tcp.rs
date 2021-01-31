@@ -11,6 +11,7 @@ use std::process::Command;
 use std::time::{Duration, SystemTime};
 use std::{cmp, ops::Range, str, thread};
 use std::sync::{RwLock, Condvar, Mutex, Arc};
+use pnet::packet::ip::IpNextHeaderProtocol;
 
 const UNDETERMINED_IP_ADDR: std::net::Ipv4Addr = Ipv4Addr::new(0,0,0, 0);
 const UNDETERMINED_PORT: u16 = 0;
@@ -39,6 +40,70 @@ impl TCP {
         tcp
     }
 
+    /// 受信スレッド
+    fn receive_handler(&self) -> Result<()> {
+        dbg!("begin recv thread");
+        let (_, mut receiver) = transport::transport_channel(
+            65535,
+            TransportChannelType::Layer3(IpNextHeaderProtocol::Tcp),
+        ).unwrap();
+        let mut packet_iter = transport::ipv4_packet_iter(&mut reciever);
+        loop {
+            let (packet, remote_addr) = match packet_iter.next() {
+                OK((p, r)) => (p, r),
+                Err(_) => continue,
+            };
+            let local_addr = packet.get_destination();
+            // pnetのTcpPacketを生成
+            let tcp_packet = match TCPPacket::new(packet.payload()) {
+                Some(p) => p,
+                None => {
+                    continue;
+                }
+            };
+            // pnet の TcpPacket から tcp::TCPPacketに変換する
+            let packet = TCPPacket::from(tcp_packet);
+            let remote_addr = match remote_addr {
+                IpAddr::V4(addr) => addr,
+                _ => {
+                    continue;
+                }
+            };
+            let mut table = self.sockets.write().unwrap();
+            let socket = match table.get_mut(&SockID(
+                local_addr,
+                remote_addr,
+                packet.get_dest(),
+                packet.get_src(),
+            )) {
+                Some(socket) => socket,
+                None => match table.get_mut(&SockID(
+                    local_addr,
+                    UNDETERMINED_IP_ADDR,
+                    packet.get_dest(),
+                    UNDETERMINED_PORT,
+                )) {
+                    Some(socket) => socket,
+                    None => continue,
+                },
+            };
+            if !packet.is_correct_checksum(local_addr, remote_addr) {
+                dbg!("invalid checksum");
+                continue;
+            }
+            let sock_id = socket.get_sock_id();
+            if let Err(error) = match socket.status {
+                TcpStatus::SynSent => self.syssent_handler(socket, &packet),
+                _ => {
+                    dbg!("not implemented stat");
+                    Ok(())
+                }
+            } {
+                dbg!(error);
+            }
+        }
+    }
+
     fn select_unused_port(&self, rng: &mut ThreadRng) -> Result<u16> {
         for _ in 0..(PORT_RANGE.end - PORT_RANGE.start) {
             let local_port = rng.gen_range(PORT_RANGE);
@@ -57,6 +122,7 @@ impl TCP {
             addr,
             self.select_unused_port(&mut rng)?,
             port,
+            TcpStatus::SynSent,
         )?;
         socket.send_param.initial_seq = rng.gen_range(1..1 << 31);
         socket.send_tcp_packet(socket.send_param.initial_seq, 0, tcpflags::SYN, &[])?;
