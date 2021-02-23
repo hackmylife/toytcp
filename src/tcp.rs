@@ -25,6 +25,27 @@ pub struct TCP {
     event_condvar: (Mutex<Option<TCPEvent>>, Condvar),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum  TCPEvent {
+    sock_id: SockID,
+    kind: TCPEventKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TCPEventKind {
+    ConnectionCompleted,
+    Acked,
+    DataArrived,
+    ConnectionClosed,
+}
+
+impl TCPEvent {
+    fn new(sock_id: SockID, kind: TCPEventKind) -> Self {
+        Self { sock_id, kind }
+    }
+}
+
+
 impl TCP {
     pub fn new() -> Arc<Self> {
         let sockets = RwLock::new(HashMap::new());
@@ -102,6 +123,42 @@ impl TCP {
                 dbg!(error);
             }
         }
+    }
+
+    /// SYNSENT 状態のソケットに到着したパケットの処理
+    fn synsent_handler(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
+        dbg!("synsent handler");
+        if packet.get_flag() & tcpflags::ACK > 0
+            && socket.send_param.unpacked_seq <= packet.get_ack()
+            && packet.get_ack() <= socket.send_param.next
+            && packet.get_flag() & tcpflags::SYN > 0
+        {
+            socket.recv_param.next = packet.get_seq() + 1;
+            socket.recv_param.initial_seq = packet.get_seq();
+            socket.send_param.unacked_seq = packet.get_ack();
+            socket.send_param.window = packet.get_window_size();
+            if socket.send_param.unacked_seq > socket.send_param.initial_seq {
+                socket.status = TcpStatus::Established;
+                socket.send_tcp_packet(
+                    socket.send_param.next,
+                    socket.recv_param.next,
+                    tcpflags::ACK,
+                    &[],
+                )?;
+                dbg!("status: synsent ->", &socket.status);
+                self.publish_event(socket.get_sock_id(), TCPEventKind::ConnectionCompleted)
+            } else {
+                socket.status = TcpStatus::SynRcvd;
+                socket.send_tcp_packet(
+                    socket.send_param.next,
+                    socket.recv_param.next,
+                    tcpflags::ACK,
+                    &[],
+                )?;
+                dbg!("status: synsent ->", &socket.status);
+            }
+        }
+        Ok(())
     }
 
     fn select_unused_port(&self, rng: &mut ThreadRng) -> Result<u16> {

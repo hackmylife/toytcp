@@ -29,7 +29,7 @@ pub struct Socket {
 
 #[derive(Clone, Debug)]
 pub struct SendParam {
-    pub unpacked_seq: u32, // 送信後まだackされていないseqの先頭
+    pub unacked_seq: u32, // 送信後まだackされていないseqの先頭
     pub next: u32,         // 次の送信
     pub window: u16,       // 送信ウィンドウサイズ
     pub initial_seq: u32,  // 初期送信 seq
