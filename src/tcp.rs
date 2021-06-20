@@ -26,7 +26,7 @@ pub struct TCP {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum  TCPEvent {
+struct TCPEvent {
     sock_id: SockID,
     kind: TCPEventKind,
 }
@@ -51,7 +51,7 @@ impl TCP {
         let sockets = RwLock::new(HashMap::new());
         let tcp = Arc::new(Self {
             sockets,
-            event_condvar: (Mutex::new(None), Condvar::new());
+            event_condvar: (Mutex::new(None), Condvar::new()),
         });
         let clonned_tcp = tcp.clone();
         std::thread::spawn(move || {
@@ -61,22 +61,47 @@ impl TCP {
         tcp
     }
 
+    /// 指定したソケットIDと種類別イベントを待機
+    fn wait_event(&self, sock_id: SockID, kind: TCPEventKind) {
+        let (lock, cvar) = &self.event_condvar;
+        let mut event = lock.lock().unwrap();
+        loop {
+            if let Some(ref e) = *event {
+                if e.sock_id == sock_id && e.kind == kind {
+                    break;
+                }
+            }
+            // cvarがnotifyされるまでeventのロックを外して待機
+            event = cvar.wait(event).unwrap();
+        }
+        dbg!(&event);
+        *event = None;
+    }
+
+    /// 指定のソケットIDにイベントを発行する
+    fn publish_event(&self, sock_id: SockID, kind: TCPEventKind) {
+        let (lock, cvar) = &self.event_condvar;
+        let mut e = lock.lock().unwrap();
+        *e = Some(TCPEvent::new(sock_id, kind));
+        cvar.notify_all();
+    }
+
     /// 受信スレッド
     fn receive_handler(&self) -> Result<()> {
         dbg!("begin recv thread");
         let (_, mut receiver) = transport::transport_channel(
             65535,
-            TransportChannelType::Layer3(IpNextHeaderProtocol::Tcp),
+            TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
         ).unwrap();
-        let mut packet_iter = transport::ipv4_packet_iter(&mut reciever);
+        let mut packet_iter = transport::ipv4_packet_iter(&mut receiver);
         loop {
             let (packet, remote_addr) = match packet_iter.next() {
-                OK((p, r)) => (p, r),
+                Ok((p, r)) => (p, r),
                 Err(_) => continue,
             };
             let local_addr = packet.get_destination();
             // pnetのTcpPacketを生成
-            let tcp_packet = match TCPPacket::new(packet.payload()) {
+            let tcp_packet = match TcpPacket::new(packet.payload()) {
                 Some(p) => p,
                 None => {
                     continue;
@@ -114,7 +139,7 @@ impl TCP {
             }
             let sock_id = socket.get_sock_id();
             if let Err(error) = match socket.status {
-                TcpStatus::SynSent => self.syssent_handler(socket, &packet),
+                TcpStatus::SynSent => self.synsent_handler(socket, &packet),
                 _ => {
                     dbg!("not implemented stat");
                     Ok(())
@@ -129,7 +154,7 @@ impl TCP {
     fn synsent_handler(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
         dbg!("synsent handler");
         if packet.get_flag() & tcpflags::ACK > 0
-            && socket.send_param.unpacked_seq <= packet.get_ack()
+            && socket.send_param.unacked_seq <= packet.get_ack()
             && packet.get_ack() <= socket.send_param.next
             && packet.get_flag() & tcpflags::SYN > 0
         {
@@ -183,7 +208,7 @@ impl TCP {
         )?;
         socket.send_param.initial_seq = rng.gen_range(1..1 << 31);
         socket.send_tcp_packet(socket.send_param.initial_seq, 0, tcpflags::SYN, &[])?;
-        socket.send_param.unpacked_seq = socket.send_param.initial_seq;
+        socket.send_param.unacked_seq = socket.send_param.initial_seq;
         socket.send_param.next = socket.send_param.initial_seq + 1;
         let mut table = self.sockets.write().unwrap();
         let sock_id = socket.get_sock_id();
