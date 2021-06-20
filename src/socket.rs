@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Display};
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::SystemTime;
-use std::intrinsics::{transmute, wrapping_add};
+use std::intrinsics::{transmute};
 
 const SOCKET_BUFFER_SIZE: usize = 4380;
 
@@ -90,7 +90,7 @@ impl Socket {
             local_port,
             remote_port,
             send_param: SendParam {
-                unpacked_seq: 0,
+                unacked_seq: 0,
                 initial_seq: 0,
                 next: 0,
                 window: SOCKET_BUFFER_SIZE as u16,
@@ -122,7 +122,6 @@ impl Socket {
         tcp_packet.set_flag(flag);
         tcp_packet.set_window_size(self.recv_param.window);
         tcp_packet.set_payload(payload);
-        hoge: usize;
         tcp_packet.set_checksum(util::ipv4_checksum(
             &tcp_packet.packet(),
             8,

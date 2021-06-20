@@ -101,11 +101,19 @@ impl TCPPacket{
         self.buffer[13] = flag;
     }
 
+    pub fn set_data_offset(&mut self, offset: u8) {
+        self.buffer[12] |= offset << 4;
+    }
+
     pub fn set_window_size(&mut self, window: u16) {
         self.buffer[14..16].copy_from_slice(&window.to_be_bytes())
     }
 
-    pub fn set_checksum(&mut self, payload: u16) {
+    pub fn set_checksum(&mut self, checksum: u16) {
+        self.buffer[16..18].copy_from_slice(&checksum.to_be_bytes())
+    }
+
+    pub fn set_payload(&mut self, payload: &[u8]) {
         self.buffer[TCP_HEADER_SIZE..TCP_HEADER_SIZE + payload.len() as usize]
             .copy_from_slice(payload)
     }
@@ -151,7 +159,7 @@ impl Debug for TCPPacket {
 }
 
 impl<'a> From<TcpPacket<'a>> for TCPPacket {
-    fn from(packet: TCPPacket) -> Self {
+    fn from(packet: TcpPacket) -> Self {
         Self {
             buffer: packet.packet().to_vec(),
         }
