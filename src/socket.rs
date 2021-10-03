@@ -24,6 +24,7 @@ pub struct Socket {
     pub send_param: SendParam,
     pub recv_param: RecvParam,
     pub status: TcpStatus,
+    pub retransmission_queue: VecDeque<RetransmissionQueueEntry>,
     pub connected_connection_queue: VecDeque<SockID>, // 接続済みソケットのキュー。リスニングソケットのみ使用
     pub listening_socket: Option<SockID>, //生成元のリスニングソケット。接続済みソケットのみ使用
     pub sender: TransportSender,
@@ -45,6 +46,13 @@ pub struct RecvParam {
     pub tail: u32,        // 受信seqの最後尾
 }
 
+#[derive(Clone, Debug)]
+pub struct RetransmissionQueueEntry {
+    pub packet: TCPPacket,
+    pub latest_transmission_time: SystemTime,
+    pub transmission_count: u8,
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum TcpStatus {
     Listen,
@@ -57,6 +65,17 @@ pub enum TcpStatus {
     CloseWait,
     LastAck,
 }
+
+impl RetransmissionQueueEntry {
+    fn new(packet: TCPPacket) -> Self {
+        Self {
+            packet,
+            latest_transmission_time: SystemTime::now(),
+            transmission_count: 1,
+        }
+    }
+}
+
 
 impl Display for TcpStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -104,6 +123,7 @@ impl Socket {
                 tail: 0,
             },
             status,
+            retransmission_queue: VecDeque::new(),
             connected_connection_queue: VecDeque::new(),
             listening_socket: None,
             sender,
@@ -140,6 +160,10 @@ impl Socket {
             .context(format!("failed to send: \n{:?}", tcp_packet))?;
 
         dbg!("sent", &tcp_packet);
+        if payload.is_empty() && tcp_packet.get_flag() == tcpflags::ACK {
+            return Ok(sent_size);
+        }
+        self.retransmission_queue.push_back(RetransmissionQueueEntry::new(tcp_packet));
         Ok(sent_size)
     }
 
